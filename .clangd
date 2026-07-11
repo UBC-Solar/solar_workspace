@@ -1,0 +1,35 @@
+---
+If:
+  PathMatch: "firmware_v4/firmware/components/drd/.*"
+CompileFlags:
+  CompilationDatabase: firmware_v4/firmware/components/drd/build/Debug
+---
+If:
+  PathMatch: "firmware_v4/firmware/components/mdi/.*"
+CompileFlags:
+  CompilationDatabase: firmware_v4/firmware/components/mdi/build/Debug
+---
+If:
+  PathMatch: "firmware_v4/firmware/components/tel/.*"
+CompileFlags:
+  CompilationDatabase: firmware_v4/firmware/components/tel/build/Debug
+---
+If:
+  PathMatch: "firmware_v4/firmware/components/hvc/.*"
+CompileFlags:
+  CompilationDatabase: firmware_v4/firmware/components/hvc/build/Debug
+---
+If:
+  PathMatch: "firmware_v4/firmware/components/mst/.*"
+CompileFlags:
+  CompilationDatabase: firmware_v4/firmware/components/mst/build/Debug
+---
+If:
+  PathMatch: "firmware_v4/firmware/components/str/.*"
+CompileFlags:
+  CompilationDatabase: firmware_v4/firmware/components/str/build/Debug
+---
+If:
+  PathMatch: "firmware_v4/firmware/common/.*"
+CompileFlags:
+  CompilationDatabase: firmware_v4/firmware/components/drd/build/Debug

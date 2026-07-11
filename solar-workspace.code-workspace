@@ -1,0 +1,35 @@
+{
+  "folders": [
+    {
+      "name": "firmware_v4",
+      "path": "../firmware_v4"
+    },
+    {
+      "name": "sunlink",
+      "path": "../sunlink"
+    },
+    {
+      "name": "solar_tools",
+      "path": "../solar_tools"
+    },
+    {
+      "name": "firmware_v3",
+      "path": "../firmware_v3"
+    }
+  ],
+  "settings": {
+    "stm32cube-ide-clangd.path": "cube",
+    "stm32cube-ide-clangd.arguments": [
+      "starm-clangd",
+      "--clang-tidy",
+      "--query-driver=/home/gregorybian/.local/share/stm32cube/bundles/gnu-tools-for-stm32/13.3.1+st.9/bin/arm-none-eabi-gcc",
+      "--query-driver=/home/gregorybian/.local/share/stm32cube/bundles/gnu-tools-for-stm32/13.3.1+st.9/bin/arm-none-eabi-g++"
+    ],
+    "[c]": {
+      "editor.defaultFormatter": "STMicroelectronics.stm32cube-ide-clangd"
+    },
+    "[cpp]": {
+      "editor.defaultFormatter": "STMicroelectronics.stm32cube-ide-clangd"
+    }
+  }
+}
