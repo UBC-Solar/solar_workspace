@@ -15,6 +15,10 @@
     {
       "name": "firmware_v3",
       "path": "../firmware_v3"
+    },
+    {
+      "name": "solar_workspace",
+      "path": "../solar_workspace"
     }
   ],
   "settings": {
