@@ -9,6 +9,10 @@
       "path": "../sunlink"
     },
     {
+      "name": "sunlite",
+      "path": "../sunlite"
+    },
+    {
       "name": "solar_tools",
       "path": "../solar_tools"
     },
