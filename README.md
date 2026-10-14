@@ -11,13 +11,58 @@ Place the repositories as sibling folders inside the same parent directory:
 ├── solar_workspace/    # this workspace folder
 ├── firmware_v4/
 ├── sunlink/
-├── solar_tools/
-└── firmware_v3/
+├── sunlite/
+└── solar_tools/
 ```
 
 The workspace file [solar-workspace.code-workspace](solar-workspace.code-workspace) already points to these folders relative to the parent directory.
 
-## Setup
+## Quick setup (firmware, Ubuntu)
+
+> [!IMPORTANT]
+> **Install STM32CubeMX manually first.** The download needs an ST account, so the bootstrap script can't install it for you.
+>
+> 1. Go to [st.com/stm32cubemx](https://www.st.com/en/development-tools/stm32cubemx) → **Get Software** → **Get latest**, then sign in or create an account. After signing in, click **Get latest** again to download the ZIP.
+> 2. Extract the ZIP and run the `SetupSTM32CubeMX-*` installer inside it. Keep the default install location, `~/STM32CubeMX`.
+>
+> The bootstrap script finds CubeMX in `~/STM32CubeMX` and points the STM32 VS Code extension at it. If you installed it somewhere else, pass `--cubemx /path/to/STM32CubeMX`. If you install CubeMX after running the bootstrap, run the script again.
+
+Then clone this repo into your parent folder and run the bootstrap script:
+
+```bash
+mkdir -p ~/Desktop/UBC_Solar && cd ~/Desktop/UBC_Solar
+git clone https://github.com/UBC-Solar/solar_workspace.git
+./solar_workspace/bootstrap.sh
+```
+
+This automates the Ubuntu steps of the wiki's *How to Install STM32 VS Code for Firmware_v4 Development*:
+
+- Installs the ARM toolchain, CMake and Ninja (the same packages as firmware_v4 CI), plus Ruby for Ceedling and ST-LINK udev rules. It also installs VS Code if it's missing.
+- Adds you to the `dialout` group.
+- Clones `firmware_v4`, `sunlite` and `solar_tools` next to this folder and installs the `firmware_v4` git hooks. Only `firmware_v4` is set up beyond cloning.
+- Installs the STM32Cube, CMake Tools and Cortex-Debug VS Code extensions.
+- Installs the STM32Cube bundles that `firmware_v4/.settings/bundles.store.json` pins, so you don't need the Bundles Manager.
+- Sets `CUBE_BUNDLE_PATH`. It works with .deb, Snap and Flatpak VS Code.
+- Points the STM32 extension at your STM32CubeMX install. It doesn't install CubeMX itself; see the note above.
+- Points Cortex-Debug at the bundle's `arm-none-eabi-gdb` and J-Link GDB server, and installs the J-Link udev rules. The "J-Link + SWO" debug config needs these, because apt's `gcc-arm-none-eabi` doesn't include gdb. Paths you've already set yourself are kept.
+- Test-builds one board.
+
+It's safe to re-run, and existing clones are left untouched. Run `./bootstrap.sh --help` for options (`--ssh`, `--cubemx`, `--skip-apt`, `--skip-bundles`, `--skip-verify`, `--dry-run`).
+
+## Telemetry (sunlink)
+
+sunlink has its own installer, which also sets up Docker, InfluxDB and Grafana. Run it from the parent folder so `sunlink/` ends up next to the other repos:
+
+```bash
+cd ~/Desktop/UBC_Solar
+curl -O https://raw.githubusercontent.com/UBC-Solar/sunlink/main/setup.sh
+chmod +x setup.sh
+./setup.sh
+```
+
+See the [sunlink README](https://github.com/UBC-Solar/sunlink#how-to-install-sunlink) for details.
+
+## Manual setup
 
 1. Create or open the parent folder:
    ```bash
@@ -29,8 +74,8 @@ The workspace file [solar-workspace.code-workspace](solar-workspace.code-workspa
    - `solar_workspace/`
    - `firmware_v4/`
    - `sunlink/`
+   - `sunlite/`
    - `solar_tools/`
-   - `firmware_v3/`
 
 3. Open the workspace in VS Code:
    ```bash
