@@ -11,13 +11,25 @@ Place the repositories as sibling folders inside the same parent directory:
 ├── solar_workspace/    # this workspace folder
 ├── firmware_v4/
 ├── sunlink/
-├── solar_tools/
-└── firmware_v3/
+├── sunlite/
+└── solar_tools/
 ```
 
 The workspace file [solar-workspace.code-workspace](solar-workspace.code-workspace) already points to these folders relative to the parent directory.
 
-## Setup
+## Quick setup (firmware, Ubuntu)
+
+Clone this repo into your parent folder, then run the bootstrap script:
+
+```bash
+mkdir -p ~/Desktop/UBC_Solar && cd ~/Desktop/UBC_Solar
+git clone https://github.com/UBC-Solar/solar_workspace.git
+./solar_workspace/bootstrap.sh
+```
+
+It installs the ARM toolchain (the same packages as firmware_v4 CI), Ruby for Ceedling, and ST-LINK udev rules. It also adds you to the `dialout` group, clones `firmware_v4`, `sunlink`, `sunlite` and `solar_tools` next to this folder, and installs the `firmware_v4` git hooks. Only `firmware_v4` is set up beyond cloning; see the other repos' READMEs for their own setup. The script also sets `CUBE_BUNDLE_PATH` and installs the STM32Cube VS Code extensions. To finish, it test-builds one board. It's safe to re-run, and existing clones are left untouched. Run `./bootstrap.sh --help` for options (`--ssh`, `--skip-apt`, `--skip-verify`, `--dry-run`).
+
+## Manual setup
 
 1. Create or open the parent folder:
    ```bash
@@ -29,8 +41,8 @@ The workspace file [solar-workspace.code-workspace](solar-workspace.code-workspa
    - `solar_workspace/`
    - `firmware_v4/`
    - `sunlink/`
+   - `sunlite/`
    - `solar_tools/`
-   - `firmware_v3/`
 
 3. Open the workspace in VS Code:
    ```bash
