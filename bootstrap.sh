@@ -183,6 +183,12 @@ detect_vscode() {
     BUNDLE_DIR="$VSCODE_DATA/stm32cube/bundles"
 }
 
+# apt-get update fails if *any* configured repo is broken (expired third-party auth,
+# dead PPA, ...). The Ubuntu repos usually still update fine, so warn and carry on.
+apt_update() {
+    run sudo apt-get update || warn "apt-get update reported errors (often an unrelated third-party repo in /etc/apt/sources.list.d); continuing"
+}
+
 # Microsoft's apt repo, per https://code.visualstudio.com/docs/setup/linux
 install_vscode() {
     run sudo apt-get install -y wget gpg
@@ -202,7 +208,7 @@ Components: main
 Architectures: amd64,arm64,armhf
 Signed-By: /usr/share/keyrings/microsoft.gpg
 EOF
-    sudo apt-get update
+    apt_update
     sudo apt-get install -y code
 }
 
@@ -225,7 +231,7 @@ else
         ok "all packages already installed"
     else
         echo "  installing: ${missing[*]}"
-        run sudo apt-get update
+        apt_update
         run sudo apt-get install -y "${missing[@]}"
         # Pick up the ST-LINK udev rules shipped by stlink-tools
         run sudo udevadm control --reload-rules
@@ -317,12 +323,17 @@ fi
 # Same as the wiki's Bundles Manager + "cube bundle show --project" steps, using the
 # cube CLI that ships inside the STM32Cube core extension.
 step "STM32Cube bundles (versions pinned by $FW_REPO)"
-FW_GCC_VERSION="$(python3 -I -c '
+# Version of a bundle pinned in firmware_v4/.settings/bundles.store.json
+bundle_version() {
+    python3 -I -c '
 import json, sys
 for b in json.load(open(sys.argv[1]))["bundles"]:
-    if b["name"] == "gnu-tools-for-stm32":
+    if b["name"] == sys.argv[2]:
         print(b["version"])
-' "$FW_DIR/.settings/bundles.store.json" 2>/dev/null || true)"
+' "$FW_DIR/.settings/bundles.store.json" "$1" 2>/dev/null || true
+}
+FW_GCC_VERSION="$(bundle_version gnu-tools-for-stm32)"
+FW_JLINK_VERSION="$(bundle_version jlink-gdbserver)"
 
 if $SKIP_BUNDLES; then
     skip "skipped (--skip-bundles)"
@@ -399,50 +410,103 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
-# 7. STM32CubeMX
+# 7. VS Code user settings (CubeMX + Cortex-Debug)
 # ---------------------------------------------------------------------------
-# CubeMX needs an st.com login to download, so it can't be installed here. If it's
-# already installed, point the STM32 extension at it (wiki: "Absolute path to CubeMx").
-step "STM32CubeMX"
+# - CubeMX needs an st.com login to download, so it can't be installed here. If it's
+#   already installed, point the STM32 extension at it (wiki: "Absolute path to CubeMx").
+# - The "J-Link + SWO" launch config in firmware_v4 uses Cortex-Debug, which looks for
+#   arm-none-eabi-gdb on PATH. apt's gcc-arm-none-eabi doesn't ship gdb, so point
+#   Cortex-Debug at the gdb and J-Link GDB server from the bundles installed above.
+step "VS Code settings (STM32CubeMX, Cortex-Debug)"
+SETTINGS_FILE="$VSCODE_USER_DIR/settings.json"
+SETTING_ARGS=()
+
 if [[ -z "$CUBEMX_PATH" ]]; then
     for candidate in "${CUBEMX_CANDIDATES[@]}"; do
         [[ -x "$candidate" ]] && { CUBEMX_PATH="$candidate"; break; }
     done
 fi
-
-SETTINGS_FILE="$VSCODE_USER_DIR/settings.json"
 if [[ -z "$CUBEMX_PATH" ]]; then
-    warn "STM32CubeMX not found. Download it from https://www.st.com/en/development-tools/stm32cubemx (needs an ST account), run the installer, then re-run this script"
+    warn "STM32CubeMX not found. Install it manually (needs an ST account, see the README), then re-run this script"
 elif [[ ! -x "$CUBEMX_PATH" ]]; then
     warn "$CUBEMX_PATH is not an executable; pass the STM32CubeMX binary with --cubemx"
-elif [[ "$VSCODE_KIND" == none ]]; then
-    skip "found $CUBEMX_PATH; skipped VS Code setting (no VS Code)"
-elif [[ -f "$SETTINGS_FILE" ]] && grep -qF "\"$CUBEMX_SETTING\"" "$SETTINGS_FILE"; then
-    ok "VS Code already has a CubeMX path set"
-elif $DRY_RUN; then
-    echo -e "  ${YELLOW}[dry-run]${RESET} set $CUBEMX_SETTING = $CUBEMX_PATH in $SETTINGS_FILE"
 else
-    # settings.json may contain comments (JSONC); only edit it if it parses as plain JSON
-    if python3 -I - "$SETTINGS_FILE" "$CUBEMX_SETTING" "$CUBEMX_PATH" <<'EOF'
+    SETTING_ARGS+=("$CUBEMX_SETTING" "$CUBEMX_PATH")
+fi
+
+GCC_BIN_DIR="$BUNDLE_DIR/gnu-tools-for-stm32/$FW_GCC_VERSION/bin"
+if [[ -n "$FW_GCC_VERSION" && -x "$GCC_BIN_DIR/arm-none-eabi-gdb" ]]; then
+    SETTING_ARGS+=(cortex-debug.gdbPath.linux "$GCC_BIN_DIR/arm-none-eabi-gdb")
+    SETTING_ARGS+=(cortex-debug.armToolchainPath.linux "$GCC_BIN_DIR")
+elif ! $DRY_RUN; then
+    warn "arm-none-eabi-gdb not found in $GCC_BIN_DIR (bundles not installed?); Cortex-Debug launch configs won't work until cortex-debug.gdbPath is set"
+fi
+
+JLINK_SERVER="$BUNDLE_DIR/jlink-gdbserver/$FW_JLINK_VERSION/bin/JLinkGDBServerCLExe"
+if [[ -n "$FW_JLINK_VERSION" && -x "$JLINK_SERVER" ]]; then
+    SETTING_ARGS+=(cortex-debug.JLinkGDBServerPath.linux "$JLINK_SERVER")
+fi
+
+if [[ "$VSCODE_KIND" == none ]]; then
+    skip "skipped (no VS Code)"
+elif [[ ${#SETTING_ARGS[@]} -eq 0 ]]; then
+    skip "nothing to set"
+else
+    # Each key is only set if it's missing or points at a path that doesn't exist, so
+    # paths you've set yourself (e.g. a SEGGER J-Link install) are kept. settings.json
+    # may contain comments (JSONC); it's only edited if it parses as plain JSON.
+    if settings_out="$(python3 -I - "$SETTINGS_FILE" "$DRY_RUN" "${SETTING_ARGS[@]}" <<'EOF'
 import json, os, shutil, sys
-path, key, value = sys.argv[1:]
+path, dry_run, pairs = sys.argv[1], sys.argv[2] == "true", sys.argv[3:]
 settings = {}
 if os.path.exists(path):
     with open(path) as f:
         text = f.read()
-    settings = json.loads(text) if text.strip() else {}
-    shutil.copy2(path, path + ".bak-bootstrap")
-os.makedirs(os.path.dirname(path), exist_ok=True)
-settings[key] = value
-with open(path, "w") as f:
-    json.dump(settings, f, indent=4)
-    f.write("\n")
+    try:
+        settings = json.loads(text) if text.strip() else {}
+    except json.JSONDecodeError:
+        sys.exit(3)
+changed = False
+for key, value in zip(pairs[::2], pairs[1::2]):
+    current = settings.get(key)
+    if current == value or (isinstance(current, str) and os.path.exists(current)):
+        print(f"keep\t{key} = {current}")
+    else:
+        settings[key] = value
+        changed = True
+        print(f"set\t{key} = {value}")
+if changed and not dry_run:
+    if os.path.exists(path):
+        shutil.copy2(path, path + ".bak-bootstrap")
+        print("backup\t" + path + ".bak-bootstrap")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(settings, f, indent=4)
+        f.write("\n")
 EOF
-    then
-        ok "set CubeMX path to $CUBEMX_PATH (backup: settings.json.bak-bootstrap)"
+    )"; then
+        while IFS=$'\t' read -r action detail; do
+            case "$action" in
+                keep)   ok "already set: $detail" ;;
+                set)    if $DRY_RUN; then echo -e "  ${YELLOW}[dry-run]${RESET} set $detail"; else ok "set $detail"; fi ;;
+                backup) echo "  (previous settings backed up to $detail)" ;;
+            esac
+        done <<<"$settings_out"
     else
-        warn "couldn't edit $SETTINGS_FILE automatically; in VS Code set Settings → Extensions → STM32CubeCore → 'Absolute path to the STM32CubeMX executable' to $CUBEMX_PATH"
+        warn "couldn't edit $SETTINGS_FILE automatically (not plain JSON); set these in VS Code settings: ${SETTING_ARGS[*]}"
     fi
+fi
+
+# J-Link probes need udev rules for non-root access (the SEGGER installer adds the
+# same file; the jlink-gdbserver bundle ships a copy)
+JLINK_RULES="$BUNDLE_DIR/jlink-gdbserver/$FW_JLINK_VERSION/bin/99-jlink.rules"
+if [[ -f /etc/udev/rules.d/99-jlink.rules ]]; then
+    ok "J-Link udev rules already installed"
+elif [[ -n "$FW_JLINK_VERSION" && -f "$JLINK_RULES" ]] && ! $SKIP_APT; then
+    run sudo install -m 644 "$JLINK_RULES" /etc/udev/rules.d/99-jlink.rules
+    run sudo udevadm control --reload-rules
+    run sudo udevadm trigger
+    ok "installed J-Link udev rules"
 fi
 
 # ---------------------------------------------------------------------------

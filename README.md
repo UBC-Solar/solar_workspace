@@ -19,7 +19,15 @@ The workspace file [solar-workspace.code-workspace](solar-workspace.code-workspa
 
 ## Quick setup (firmware, Ubuntu)
 
-Clone this repo into your parent folder, then run the bootstrap script:
+> [!IMPORTANT]
+> **Install STM32CubeMX manually first.** The download needs an ST account, so the bootstrap script can't install it for you.
+>
+> 1. Go to [st.com/stm32cubemx](https://www.st.com/en/development-tools/stm32cubemx) → **Get Software** → **Get latest**, then sign in or create an account. After signing in, click **Get latest** again to download the ZIP.
+> 2. Extract the ZIP and run the `SetupSTM32CubeMX-*` installer inside it. Keep the default install location, `~/STM32CubeMX`.
+>
+> The bootstrap script finds CubeMX in `~/STM32CubeMX` and points the STM32 VS Code extension at it. If you installed it somewhere else, pass `--cubemx /path/to/STM32CubeMX`. If you install CubeMX after running the bootstrap, run the script again.
+
+Then clone this repo into your parent folder and run the bootstrap script:
 
 ```bash
 mkdir -p ~/Desktop/UBC_Solar && cd ~/Desktop/UBC_Solar
@@ -35,7 +43,8 @@ This automates the Ubuntu steps of the wiki's *How to Install STM32 VS Code for 
 - Installs the STM32Cube, CMake Tools and Cortex-Debug VS Code extensions.
 - Installs the STM32Cube bundles that `firmware_v4/.settings/bundles.store.json` pins, so you don't need the Bundles Manager.
 - Sets `CUBE_BUNDLE_PATH`. It works with .deb, Snap and Flatpak VS Code.
-- Points the STM32 extension at STM32CubeMX. CubeMX needs an ST account to download, so install it yourself from [st.com](https://www.st.com/en/development-tools/stm32cubemx) first, or pass `--cubemx /path/to/STM32CubeMX`.
+- Points the STM32 extension at your STM32CubeMX install. It doesn't install CubeMX itself; see the note above.
+- Points Cortex-Debug at the bundle's `arm-none-eabi-gdb` and J-Link GDB server, and installs the J-Link udev rules. The "J-Link + SWO" debug config needs these, because apt's `gcc-arm-none-eabi` doesn't include gdb. Paths you've already set yourself are kept.
 - Test-builds one board.
 
 It's safe to re-run, and existing clones are left untouched. Run `./bootstrap.sh --help` for options (`--ssh`, `--cubemx`, `--skip-apt`, `--skip-bundles`, `--skip-verify`, `--dry-run`).
