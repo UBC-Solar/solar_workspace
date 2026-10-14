@@ -27,7 +27,31 @@ git clone https://github.com/UBC-Solar/solar_workspace.git
 ./solar_workspace/bootstrap.sh
 ```
 
-It installs the ARM toolchain (the same packages as firmware_v4 CI), Ruby for Ceedling, and ST-LINK udev rules. It also adds you to the `dialout` group, clones `firmware_v4`, `sunlink`, `sunlite` and `solar_tools` next to this folder, and installs the `firmware_v4` git hooks. Only `firmware_v4` is set up beyond cloning; see the other repos' READMEs for their own setup. The script also sets `CUBE_BUNDLE_PATH` and installs the STM32Cube VS Code extensions. To finish, it test-builds one board. It's safe to re-run, and existing clones are left untouched. Run `./bootstrap.sh --help` for options (`--ssh`, `--skip-apt`, `--skip-verify`, `--dry-run`).
+This automates the Ubuntu steps of the wiki's *How to Install STM32 VS Code for Firmware_v4 Development*:
+
+- Installs the ARM toolchain, CMake and Ninja (the same packages as firmware_v4 CI), plus Ruby for Ceedling and ST-LINK udev rules. It also installs VS Code if it's missing.
+- Adds you to the `dialout` group.
+- Clones `firmware_v4`, `sunlite` and `solar_tools` next to this folder and installs the `firmware_v4` git hooks. Only `firmware_v4` is set up beyond cloning.
+- Installs the STM32Cube, CMake Tools and Cortex-Debug VS Code extensions.
+- Installs the STM32Cube bundles that `firmware_v4/.settings/bundles.store.json` pins, so you don't need the Bundles Manager.
+- Sets `CUBE_BUNDLE_PATH`. It works with .deb, Snap and Flatpak VS Code.
+- Points the STM32 extension at STM32CubeMX. CubeMX needs an ST account to download, so install it yourself from [st.com](https://www.st.com/en/development-tools/stm32cubemx) first, or pass `--cubemx /path/to/STM32CubeMX`.
+- Test-builds one board.
+
+It's safe to re-run, and existing clones are left untouched. Run `./bootstrap.sh --help` for options (`--ssh`, `--cubemx`, `--skip-apt`, `--skip-bundles`, `--skip-verify`, `--dry-run`).
+
+## Telemetry (sunlink)
+
+sunlink has its own installer, which also sets up Docker, InfluxDB and Grafana. Run it from the parent folder so `sunlink/` ends up next to the other repos:
+
+```bash
+cd ~/Desktop/UBC_Solar
+curl -O https://raw.githubusercontent.com/UBC-Solar/sunlink/main/setup.sh
+chmod +x setup.sh
+./setup.sh
+```
+
+See the [sunlink README](https://github.com/UBC-Solar/sunlink#how-to-install-sunlink) for details.
 
 ## Manual setup
 
