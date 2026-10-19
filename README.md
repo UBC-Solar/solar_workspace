@@ -37,14 +37,16 @@ git clone https://github.com/UBC-Solar/solar_workspace.git
 
 This automates the Ubuntu steps of the wiki's *How to Install STM32 VS Code for Firmware_v4 Development*:
 
-- Installs the ARM toolchain, CMake and Ninja (the same packages as firmware_v4 CI), plus Ruby for Ceedling and ST-LINK udev rules. It also installs VS Code if it's missing.
+- Installs the ARM toolchain, CMake and Ninja (the same packages as firmware_v4 CI), plus Ruby for Ceedling, `gdb-multiarch` and ST-LINK udev rules. It also installs VS Code if it's missing.
 - Adds you to the `dialout` group.
 - Clones `firmware_v4`, `sunlite` and `solar_tools` next to this folder and installs the `firmware_v4` git hooks. Only `firmware_v4` is set up beyond cloning.
 - Installs the STM32Cube, CMake Tools and Cortex-Debug VS Code extensions.
 - Installs the STM32Cube bundles that `firmware_v4/.settings/bundles.store.json` pins, so you don't need the Bundles Manager.
-- Sets `CUBE_BUNDLE_PATH`. It works with .deb, Snap and Flatpak VS Code.
+- Adds a marked block to `~/.bashrc` (and `~/.zshrc` if zsh is your login shell) that sets `CUBE_BUNDLE_PATH` and puts `~/.local/bin` on `PATH`. It works with .deb, Snap and Flatpak VS Code.
 - Points the STM32 extension at your STM32CubeMX install. It doesn't install CubeMX itself; see the note above.
-- Points Cortex-Debug at the bundle's `arm-none-eabi-gdb` and J-Link GDB server, and installs the J-Link udev rules. The "J-Link + SWO" debug config needs these, because apt's `gcc-arm-none-eabi` doesn't include gdb. Paths you've already set yourself are kept.
+- Points Cortex-Debug at the bundle's `arm-none-eabi-gdb` and J-Link GDB server, and installs the J-Link udev rules. The "J-Link + SWO" debug config needs these, because apt's `gcc-arm-none-eabi` doesn't include gdb. Paths you've already set yourself are kept. As a fallback, it also links `~/.local/bin/arm-none-eabi-gdb` to `gdb-multiarch` (the wiki's *JLINK SWO* steps); this fallback doesn't work with Flatpak VS Code, which needs the bundles.
+
+After it finishes, quit VS Code completely (every window) and reopen it, so it picks up the new environment.
 - Test-builds one board.
 
 It's safe to re-run, and existing clones are left untouched. Run `./bootstrap.sh --help` for options (`--ssh`, `--cubemx`, `--skip-apt`, `--skip-bundles`, `--skip-verify`, `--dry-run`).
