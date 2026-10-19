@@ -9,7 +9,9 @@
 #      already present) and installs firmware_v4's git hooks
 #   4. Installs the STM32Cube, CMake Tools and Cortex-Debug VS Code extensions
 #   5. Installs the STM32Cube bundles pinned by firmware_v4 (.settings/bundles.store.json)
-#   6. Sets CUBE_BUNDLE_PATH for the workspace's clangd settings
+#   6. Shell setup in ~/.bashrc (and ~/.zshrc for zsh users): sets CUBE_BUNDLE_PATH for the
+#      workspace's clangd settings, and puts ~/.local/bin on PATH with arm-none-eabi-gdb
+#      linked to gdb-multiarch there (wiki: "JLINK SWO")
 #   7. Points the STM32Cube extension at your STM32CubeMX install (if found)
 #   8. Verifies the toolchain by building one board into a temporary directory
 #
@@ -39,6 +41,7 @@ APT_PACKAGES=(
     gcc-arm-none-eabi libnewlib-arm-none-eabi  # ARM toolchain (matches firmware_v4 CI)
     ruby                                       # runs the vendored Ceedling in firmware_v4/tools/ceedling
     stlink-tools                               # st-flash/st-info + ST-LINK udev rules
+    gdb-multiarch                              # Cortex-Debug's fallback gdb (J-Link SWO)
     python3                                    # used below to read/edit JSON
 )
 
@@ -54,8 +57,17 @@ CUBEMX_CANDIDATES=(
     "/usr/local/STMicroelectronics/STM32Cube/STM32CubeMX/STM32CubeMX"
 )
 
-RC_FILE="$HOME/.bashrc"
 RC_MARKER="# >>> UBC Solar firmware >>>"
+RC_END="# <<< UBC Solar firmware <<<"
+# VS Code takes its environment from your login shell, so that shell's rc needs the export too
+LOGIN_SHELL="$(basename "${SHELL:-bash}")"
+RC_FILES=("$HOME/.bashrc")
+if [[ "$LOGIN_SHELL" == zsh ]]; then
+    RC_FILES+=("$HOME/.zshrc")
+fi
+
+# Backups get a timestamp so re-running never overwrites an earlier one
+BACKUP_SUFFIX=".bak-bootstrap-$(date +%Y%m%d-%H%M%S)"
 
 USE_SSH=false
 SKIP_APT=false
@@ -191,6 +203,20 @@ apt_update() {
 
 # Microsoft's apt repo, per https://code.visualstudio.com/docs/setup/linux
 install_vscode() {
+    # Older install instructions used vscode.list with a different Signed-By key. apt refuses
+    # to read *any* sources when one repo is listed with two keys, so move old entries aside.
+    local f
+    for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [[ -f "$f" && "$f" != /etc/apt/sources.list.d/vscode.sources ]] || continue
+        if grep -qE 'packages\.microsoft\.com/repos/(code|vscode)' "$f"; then
+            run sudo mv "$f" "$f.disabled-by-bootstrap"
+            $DRY_RUN || warn "moved old VS Code apt source $f aside (now $f.disabled-by-bootstrap)"
+        fi
+    done
+    if grep -qsE '^[^#]*packages\.microsoft\.com/repos/(code|vscode)' /etc/apt/sources.list; then
+        warn "/etc/apt/sources.list also lists the VS Code repo; remove that line if apt reports 'Conflicting values set for option Signed-By'"
+    fi
+
     run sudo apt-get install -y wget gpg
     if $DRY_RUN; then
         echo -e "  ${YELLOW}[dry-run]${RESET} add Microsoft apt repo + key, apt-get install code"
@@ -242,15 +268,21 @@ else
     if [[ "$VSCODE_KIND" == none ]]; then
         echo "  VS Code not found; installing from Microsoft's apt repo"
         install_vscode
-        detect_vscode
+        if $DRY_RUN; then
+            # Pretend the .deb is there so the later steps show what they would do
+            VSCODE_KIND=deb; CODE=(code)
+        else
+            detect_vscode
+        fi
         ok "installed VS Code"
     else
         ok "VS Code already installed ($VSCODE_KIND)"
     fi
 fi
 
-if [[ "$VSCODE_KIND" == flatpak || "$VSCODE_KIND" == snap ]]; then
-    warn "VS Code is a $VSCODE_KIND install; the integrated terminal is sandboxed, so apt tools (make, cmake, arm-none-eabi-gcc) may not be visible there. Building with the STM32 extension still works. The .deb from code.visualstudio.com avoids this."
+# (The Snap uses classic confinement, so its terminal sees host tools; only Flatpak is sandboxed.)
+if [[ "$VSCODE_KIND" == flatpak ]]; then
+    warn "VS Code is a Flatpak install; the integrated terminal is sandboxed, so apt tools (make, cmake, arm-none-eabi-gcc) may not be visible there. Building with the STM32 extension still works. The .deb from code.visualstudio.com avoids this."
 fi
 
 # ---------------------------------------------------------------------------
@@ -306,13 +338,18 @@ step "VS Code extensions"
 if [[ "$VSCODE_KIND" == none ]]; then
     warn "VS Code not found; install it (https://code.visualstudio.com/docs/setup/linux) and re-run"
 else
-    installed="$("${CODE[@]}" --list-extensions 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+    # If listing fails, treat everything as missing; --install-extension is idempotent
+    installed="$("${CODE[@]}" --list-extensions 2>/dev/null | tr '[:upper:]' '[:lower:]')" || installed=""
     for ext in "${VSCODE_EXTENSIONS[@]}"; do
         if grep -qx "${ext,,}" <<<"$installed"; then
             ok "$ext already installed"
-        else
-            run "${CODE[@]}" --install-extension "$ext" --force >/dev/null 2>&1
+        elif $DRY_RUN; then
+            run "${CODE[@]}" --install-extension "$ext" --force
+        elif ext_out="$("${CODE[@]}" --install-extension "$ext" --force 2>&1)"; then
             ok "installed $ext"
+        else
+            tail -n 5 <<<"$ext_out" | sed 's/^/    /'
+            warn "couldn't install $ext; install it from the Extensions view in VS Code"
         fi
     done
 fi
@@ -334,6 +371,8 @@ for b in json.load(open(sys.argv[1]))["bundles"]:
 }
 FW_GCC_VERSION="$(bundle_version gnu-tools-for-stm32)"
 FW_JLINK_VERSION="$(bundle_version jlink-gdbserver)"
+FW_CMAKE_VERSION="$(bundle_version cmake)"
+FW_NINJA_VERSION="$(bundle_version ninja)"
 
 if $SKIP_BUNDLES; then
     skip "skipped (--skip-bundles)"
@@ -357,10 +396,12 @@ else
             echo -e "  ${YELLOW}[dry-run]${RESET} CUBE_BUNDLE_PATH=$BUNDLE_DIR $CUBE --cwd $FW_DIR bundle install --project --yes"
         else
             echo "  installing (the toolchain is a large download, this can take a while)..."
-            CUBE_BUNDLE_PATH="$BUNDLE_DIR" "$CUBE" --cwd "$FW_DIR" bundle install --project --yes 2>&1 \
-                | sed 's/^/    /'
             gcc_bin="$BUNDLE_DIR/gnu-tools-for-stm32/$FW_GCC_VERSION/bin/arm-none-eabi-gcc"
-            if [[ -x "$gcc_bin" ]]; then
+            # Under pipefail this is cube's exit status; a failed download shouldn't abort the rest
+            if ! CUBE_BUNDLE_PATH="$BUNDLE_DIR" "$CUBE" --cwd "$FW_DIR" bundle install --project --yes 2>&1 \
+                | sed 's/^/    /'; then
+                warn "cube bundle install failed (output above); re-run this script, or install the bundles from the Bundles Manager in VS Code"
+            elif [[ -x "$gcc_bin" ]]; then
                 ok "project bundles installed (gnu-tools-for-stm32 $FW_GCC_VERSION)"
             else
                 warn "bundle install finished but $gcc_bin is missing; check the Bundles Manager in VS Code"
@@ -370,44 +411,115 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. CUBE_BUNDLE_PATH
+# 6. Shell setup (arm-none-eabi-gdb, CUBE_BUNDLE_PATH, PATH)
 # ---------------------------------------------------------------------------
-step "CUBE_BUNDLE_PATH"
+step "Shell setup (gdb for Cortex-Debug, CUBE_BUNDLE_PATH)"
+
+# Wiki "JLINK SWO": Cortex-Debug looks for arm-none-eabi-gdb on PATH, so link it to
+# gdb-multiarch in ~/.local/bin. Step 7 prefers the bundle's gdb via cortex-debug.gdbPath;
+# this is the fallback, and works without touching shared project config.
+GDB_LINK="$HOME/.local/bin/arm-none-eabi-gdb"
+GDB_ON_PATH=false
+multiarch_gdb="$(command -v gdb-multiarch 2>/dev/null || true)"
+if [[ -e "$GDB_LINK" ]]; then
+    ok "$GDB_LINK already exists (-> $(readlink -f "$GDB_LINK"))"
+    GDB_ON_PATH=true
+elif [[ -L "$GDB_LINK" ]]; then
+    warn "$GDB_LINK is a broken symlink (-> $(readlink "$GDB_LINK")); remove it and re-run"
+elif [[ -n "$multiarch_gdb" ]] || { $DRY_RUN && ! $SKIP_APT; }; then
+    multiarch_gdb="${multiarch_gdb:-/usr/bin/gdb-multiarch}"
+    run mkdir -p "$HOME/.local/bin"
+    run ln -s "$multiarch_gdb" "$GDB_LINK"
+    $DRY_RUN || ok "linked $GDB_LINK -> $multiarch_gdb"
+    GDB_ON_PATH=true
+else
+    warn "gdb-multiarch isn't installed, so Cortex-Debug has no fallback gdb; run: sudo apt install gdb-multiarch, then re-run"
+fi
+
+# Everything we add to the rc files lives between RC_MARKER and RC_END
 RC_EXPORT="export CUBE_BUNDLE_PATH=\"$BUNDLE_PATH_RC\""
-if grep -qF "$RC_MARKER" "$RC_FILE" 2>/dev/null; then
-    if sed -n "/^$RC_MARKER\$/,/^# <<< UBC Solar firmware <<<\$/p" "$RC_FILE" | grep -qxF "$RC_EXPORT"; then
-        ok "already set in $RC_FILE"
-    else
-        # Our own block points somewhere else (e.g. VS Code was switched to/from Flatpak); fix it
-        if $DRY_RUN; then
-            echo -e "  ${YELLOW}[dry-run]${RESET} update CUBE_BUNDLE_PATH in $RC_FILE to \"$BUNDLE_PATH_RC\""
-        else
-            cp "$RC_FILE" "$RC_FILE.bak-bootstrap"
-            sed -i "/^$RC_MARKER\$/,/^# <<< UBC Solar firmware <<<\$/ s|^export CUBE_BUNDLE_PATH=.*|${RC_EXPORT//&/\\&}|" "$RC_FILE"
+
+# A CUBE_BUNDLE_PATH that's set, but not by our block, comes from the user's own config: leave it out
+USER_SETS_BUNDLE_PATH=false
+if [[ -n "${CUBE_BUNDLE_PATH:-}" ]]; then
+    USER_SETS_BUNDLE_PATH=true
+    for rc in "${RC_FILES[@]}"; do
+        if sed -n "/^$RC_MARKER\$/,/^$RC_END\$/p" "$rc" 2>/dev/null | grep -q '^export CUBE_BUNDLE_PATH='; then
+            USER_SETS_BUNDLE_PATH=false
         fi
-        ok "updated CUBE_BUNDLE_PATH in $RC_FILE for $VSCODE_KIND VS Code (backup: $RC_FILE.bak-bootstrap)"
-        NEEDS_NEW_SHELL=true
+    done
+fi
+
+rc_block() {
+    echo "$RC_MARKER"
+    if ! $USER_SETS_BUNDLE_PATH; then
+        echo "# Where the STM32Cube VS Code extension installs its bundles ($VSCODE_KIND VS Code)."
+        echo "# Referenced by the solar_workspace and firmware_v4 .vscode settings."
+        echo "$RC_EXPORT"
     fi
-elif [[ -n "${CUBE_BUNDLE_PATH:-}" ]]; then
-    ok "already set in your environment ($CUBE_BUNDLE_PATH)"
+    cat <<'EOF'
+# Cortex-Debug (J-Link SWO) finds arm-none-eabi-gdb here; bootstrap.sh links it to gdb-multiarch
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+EOF
+    echo "$RC_END"
+}
+RC_BLOCK="$(rc_block)"
+
+# Add our block to one rc file, or replace it if it's out of date
+ensure_rc_block() {
+    local rc="$1" current new
+    current="$(sed -n "/^$RC_MARKER\$/,/^$RC_END\$/p" "$rc" 2>/dev/null)" || current=""
+    if [[ "$current" == "$RC_BLOCK" ]]; then
+        ok "already set up in $rc"
+        return
+    fi
+
+    if [[ -n "$current" ]] && ! grep -qxF "$RC_END" "$rc"; then
+        # Replacing up to a missing end marker would eat the rest of the file
+        warn "$rc has '$RC_MARKER' but no '$RC_END' line; fix or remove the block by hand and re-run"
+        return
+    elif [[ -n "$current" ]]; then
+        # Written by an older bootstrap, or VS Code was switched to/from Flatpak
+        if $DRY_RUN; then
+            echo -e "  ${YELLOW}[dry-run]${RESET} update the UBC Solar block in $rc"
+        else
+            cp "$rc" "$rc$BACKUP_SUFFIX"
+            new="$(BLOCK="$RC_BLOCK" awk -v start="$RC_MARKER" -v end="$RC_END" '
+                $0 == start { print ENVIRON["BLOCK"]; skip = 1; next }
+                skip        { if ($0 == end) skip = 0; next }
+                            { print }' "$rc")"
+            # Write in place rather than mv, so a symlinked rc file stays a symlink
+            printf '%s\n' "$new" >"$rc"
+            ok "updated the UBC Solar block in $rc for $VSCODE_KIND VS Code (backup: $rc$BACKUP_SUFFIX)"
+        fi
+    else
+        if $DRY_RUN; then
+            echo -e "  ${YELLOW}[dry-run]${RESET} append the UBC Solar block to $rc"
+        else
+            printf '\n%s\n' "$RC_BLOCK" >>"$rc"
+            ok "added the UBC Solar block to $rc"
+        fi
+    fi
+    NEEDS_NEW_SHELL=true
+}
+
+for rc in "${RC_FILES[@]}"; do
+    ensure_rc_block "$rc"
+done
+
+if $USER_SETS_BUNDLE_PATH; then
+    ok "CUBE_BUNDLE_PATH comes from your own config ($CUBE_BUNDLE_PATH); left alone"
     [[ "$CUBE_BUNDLE_PATH" == "$BUNDLE_DIR" ]] \
         || warn "CUBE_BUNDLE_PATH is $CUBE_BUNDLE_PATH but this VS Code install uses $BUNDLE_DIR"
-else
-    if $DRY_RUN; then
-        echo -e "  ${YELLOW}[dry-run]${RESET} append CUBE_BUNDLE_PATH=\"$BUNDLE_PATH_RC\" to $RC_FILE"
-    else
-        cat >>"$RC_FILE" <<EOF
-
-$RC_MARKER
-# Where the STM32Cube VS Code extension installs its bundles ($VSCODE_KIND VS Code).
-# Referenced by the solar_workspace and firmware_v4 .vscode settings.
-export CUBE_BUNDLE_PATH="$BUNDLE_PATH_RC"
-# <<< UBC Solar firmware <<<
-EOF
-    fi
-    ok "added export to $RC_FILE"
-    NEEDS_NEW_SHELL=true
 fi
+
+case "$LOGIN_SHELL" in
+    bash|zsh) ;;
+    *) warn "your login shell is $LOGIN_SHELL, which VS Code reads its environment from; set CUBE_BUNDLE_PATH=$BUNDLE_DIR and add ~/.local/bin to PATH in its config (only bash and zsh are handled automatically)" ;;
+esac
 
 # ---------------------------------------------------------------------------
 # 7. VS Code user settings (CubeMX + Cortex-Debug)
@@ -416,7 +528,8 @@ fi
 #   already installed, point the STM32 extension at it (wiki: "Absolute path to CubeMx").
 # - The "J-Link + SWO" launch config in firmware_v4 uses Cortex-Debug, which looks for
 #   arm-none-eabi-gdb on PATH. apt's gcc-arm-none-eabi doesn't ship gdb, so point
-#   Cortex-Debug at the gdb and J-Link GDB server from the bundles installed above.
+#   Cortex-Debug at the gdb and J-Link GDB server from the bundles installed above
+#   (the gdb-multiarch link from step 6 covers it when the bundles aren't there).
 step "VS Code settings (STM32CubeMX, Cortex-Debug)"
 SETTINGS_FILE="$VSCODE_USER_DIR/settings.json"
 SETTING_ARGS=()
@@ -438,7 +551,14 @@ GCC_BIN_DIR="$BUNDLE_DIR/gnu-tools-for-stm32/$FW_GCC_VERSION/bin"
 if [[ -n "$FW_GCC_VERSION" && -x "$GCC_BIN_DIR/arm-none-eabi-gdb" ]]; then
     SETTING_ARGS+=(cortex-debug.gdbPath.linux "$GCC_BIN_DIR/arm-none-eabi-gdb")
     SETTING_ARGS+=(cortex-debug.armToolchainPath.linux "$GCC_BIN_DIR")
-elif ! $DRY_RUN; then
+elif $DRY_RUN; then
+    :
+elif [[ "$VSCODE_KIND" == flatpak ]]; then
+    # Inside the Flatpak sandbox /usr is the runtime's, so the host's gdb-multiarch isn't there
+    warn "arm-none-eabi-gdb not found in $GCC_BIN_DIR (bundles not installed?); Flatpak VS Code can't run the host's gdb-multiarch, so Cortex-Debug needs the bundles (re-run without --skip-bundles)"
+elif $GDB_ON_PATH; then
+    skip "no bundle gdb in $GCC_BIN_DIR; Cortex-Debug will use $GDB_LINK from PATH"
+else
     warn "arm-none-eabi-gdb not found in $GCC_BIN_DIR (bundles not installed?); Cortex-Debug launch configs won't work until cortex-debug.gdbPath is set"
 fi
 
@@ -455,9 +575,9 @@ else
     # Each key is only set if it's missing or points at a path that doesn't exist, so
     # paths you've set yourself (e.g. a SEGGER J-Link install) are kept. settings.json
     # may contain comments (JSONC); it's only edited if it parses as plain JSON.
-    if settings_out="$(python3 -I - "$SETTINGS_FILE" "$DRY_RUN" "${SETTING_ARGS[@]}" <<'EOF'
+    if settings_out="$(python3 -I - "$SETTINGS_FILE" "$DRY_RUN" "$BACKUP_SUFFIX" "${SETTING_ARGS[@]}" <<'EOF'
 import json, os, shutil, sys
-path, dry_run, pairs = sys.argv[1], sys.argv[2] == "true", sys.argv[3:]
+path, dry_run, backup_suffix, pairs = sys.argv[1], sys.argv[2] == "true", sys.argv[3], sys.argv[4:]
 settings = {}
 if os.path.exists(path):
     with open(path) as f:
@@ -477,8 +597,8 @@ for key, value in zip(pairs[::2], pairs[1::2]):
         print(f"set\t{key} = {value}")
 if changed and not dry_run:
     if os.path.exists(path):
-        shutil.copy2(path, path + ".bak-bootstrap")
-        print("backup\t" + path + ".bak-bootstrap")
+        shutil.copy2(path, path + backup_suffix)
+        print("backup\t" + path + backup_suffix)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         json.dump(settings, f, indent=4)
@@ -518,13 +638,25 @@ if $SKIP_VERIFY; then
 elif $DRY_RUN; then
     skip "skipped (dry run)"
 else
+    # Prefer the bundled toolchain VS Code builds with; apt's tools are the fallback
+    for bundle_bin in "$GCC_BIN_DIR" \
+        "$BUNDLE_DIR/cmake/$FW_CMAKE_VERSION/bin" \
+        "$BUNDLE_DIR/ninja/$FW_NINJA_VERSION/bin"; do
+        if [[ -d "$bundle_bin" ]]; then PATH="$bundle_bin:$PATH"; fi
+    done
+
     missing_tools=()
     for tool in cmake ninja arm-none-eabi-gcc; do
         command -v "$tool" >/dev/null 2>&1 || missing_tools+=("$tool")
     done
+    # firmware_v4's CMakePresets.json is schema version 3
+    CMAKE_MIN="3.21"
+    cmake_version="$(cmake --version 2>/dev/null | sed -n '1s/.* //p')"
 
     if [[ ${#missing_tools[@]} -gt 0 ]]; then
         warn "can't verify: missing ${missing_tools[*]} (re-run without --skip-apt?)"
+    elif ! printf '%s\n' "$CMAKE_MIN" "$cmake_version" | sort -V -C; then
+        warn "can't verify: cmake $cmake_version is older than $CMAKE_MIN (needed for CMake presets); install the STM32Cube bundles, which include a newer CMake"
     else
         # Build outside the repo so an existing VS Code build/ dir is never touched
         BUILD_TMP="$(mktemp -d)"
@@ -535,7 +667,7 @@ else
         if cmake --preset Debug -S "$SRC" -B "$BUILD_TMP/build" >"$LOG" 2>&1 \
             && cmake --build "$BUILD_TMP/build" >>"$LOG" 2>&1 \
             && find "$BUILD_TMP/build" -name '*.elf' | grep -q .; then
-            ok "$VERIFY_BOARD built successfully ($(arm-none-eabi-gcc -dumpversion))"
+            ok "$VERIFY_BOARD built successfully (arm-none-eabi-gcc $(arm-none-eabi-gcc -dumpversion) from $(dirname "$(command -v arm-none-eabi-gcc)"))"
         else
             tail -n 20 "$LOG" | sed 's/^/    /'
             cp "$LOG" "$PARENT_DIR/bootstrap-build.log"
@@ -555,8 +687,9 @@ fi
 
 echo -e "  ${BOLD}Next steps:${RESET}"
 $NEEDS_RELOGIN   && echo "    - Log out and back in so the dialout group takes effect"
-$NEEDS_NEW_SHELL && echo "    - Open a new terminal (or: source $RC_FILE) to pick up CUBE_BUNDLE_PATH"
-echo "    - Open the workspace (restart VS Code first if it was open):"
+$NEEDS_NEW_SHELL && echo "    - Open a new terminal (or: source ${RC_FILES[-1]}) to pick up CUBE_BUNDLE_PATH and PATH"
+# VS Code reads the shell environment once, when its first window starts
+echo "    - If VS Code is open, quit it completely (every window), then open the workspace:"
 echo "        code \"$SCRIPT_DIR/solar-workspace.code-workspace\""
 echo "    - In VS Code, pick a project + configuration in the CMake panel and build"
 echo "    - Build from the terminal: make -C \"$FW_DIR\" all debug"
