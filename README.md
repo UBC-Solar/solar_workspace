@@ -51,6 +51,30 @@ After it finishes, quit VS Code completely (every window) and reopen it, so it p
 
 It's safe to re-run, and existing clones are left untouched. Run `./bootstrap.sh --help` for options (`--ssh`, `--cubemx`, `--skip-apt`, `--skip-bundles`, `--skip-verify`, `--dry-run`).
 
+## Quick setup (firmware, Windows)
+
+Install STM32CubeMX manually first, as in the Ubuntu note above (keep the default install location). The ST-LINK USB driver ([STSW-LINK009](https://www.st.com/en/development-tools/stsw-link009.html)) also needs an ST account, so install it the same way.
+
+Then, from a normal PowerShell or cmd window (not "Run as administrator"):
+
+```powershell
+mkdir $HOME\Desktop\UBC_Solar; cd $HOME\Desktop\UBC_Solar
+git clone https://github.com/UBC-Solar/solar_workspace.git
+.\solar_workspace\bootstrap.cmd
+```
+
+No git yet? Run `winget install --id Git.Git -e` first, then open a new window.
+
+`bootstrap.cmd` runs `bootstrap.ps1` without changing PowerShell's execution policy. It does the same steps as `bootstrap.sh`, with these differences:
+
+- Uses winget to install Git, Ruby, make, the SEGGER J-Link software (for its USB driver) and VS Code, each only if it's missing. The installers ask for admin rights themselves.
+- Takes the ARM toolchain, CMake and Ninja from the STM32Cube bundles only, with no system packages.
+- Sets `CUBE_BUNDLE_PATH` as a user environment variable instead of in `~/.bashrc`, and puts the newest SEGGER J-Link folder (or the `jlink-gdbserver` bundle) on your user PATH so `JLink.exe` works from a terminal.
+- Sets the `cortex-debug.*.windows` settings to the bundle's `arm-none-eabi-gdb.exe` and `JLinkGDBServerCL.exe`.
+- Skips the `dialout` group and udev rules, which Windows doesn't need. It does check that the ST-LINK driver is installed.
+
+Options: `-Ssh`, `-CubeMX <path to STM32CubeMX.exe>`, `-SkipInstall`, `-SkipBundles`, `-SkipVerify`, `-DryRun`. Afterwards, quit VS Code completely and reopen it.
+
 ## Telemetry (sunlink)
 
 sunlink has its own installer, which also sets up Docker, InfluxDB and Grafana. Run it from the parent folder so `sunlink/` ends up next to the other repos:
