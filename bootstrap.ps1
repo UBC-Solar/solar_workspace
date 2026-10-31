@@ -73,7 +73,7 @@ $WingetPackages = @(
     @{ Id = "Git.Git";                    Name = "Git";    Test = { Test-Command git } }
     @{ Id = "RubyInstallerTeam.Ruby.3.3"; Name = "Ruby";   Test = { Test-Command ruby } }  # runs the vendored Ceedling
     @{ Id = "ezwinports.make";            Name = "make";   Test = { Test-Command make } }  # firmware_v4's top-level Makefile
-    @{ Id = "SEGGER.JLink";               Name = "J-Link"; Test = { Test-Path "$env:ProgramFiles\SEGGER\JLink*" } }  # J-Link USB driver
+    @{ Id = "NordicSemiconductor.JLink";  Name = "J-Link"; Test = { Test-Path "$env:ProgramFiles\SEGGER\JLink*\JLink.exe" }; Detached = "JLink_Windows" }  # J-Link USB driver (SEGGER's installer, published by Nordic; x64 only)
 )
 
 $VSCodeExtensions = @(
@@ -176,12 +176,26 @@ $Code = Find-VSCode
 # ---------------------------------------------------------------------------
 # 1. Programs (winget) + VS Code
 # ---------------------------------------------------------------------------
-function Install-WingetPackage([string]$Id, [string]$Name) {
+# SEGGER's installer relaunches itself elevated from %TEMP% and exits with 2 straight away, so
+# winget reports a failure while the real install carries on in the background.
+function Wait-DetachedInstaller([string]$Process, [int]$TimeoutSec = 300) {
+    Start-Sleep -Seconds 2
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Process $Process -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 2
+    }
+}
+
+function Install-WingetPackage([string]$Id, [string]$Name, [scriptblock]$Test = $null, [string]$Detached = "") {
     if ($DryRun) { DryRunMsg "winget install --id $Id"; return }
     Write-Host "  installing $Name ($Id)..."
     $r = Invoke-Native winget @("install", "--id", $Id, "--exact", "--silent",
                                 "--accept-package-agreements", "--accept-source-agreements")
-    if ($r.ExitCode -eq 0) {
+    if ($r.ExitCode -ne 0 -and $Detached) {
+        Write-Host "  waiting for the $Name installer to finish..."
+        Wait-DetachedInstaller $Detached
+    }
+    if ($r.ExitCode -eq 0 -or ($Detached -and (& $Test))) {
         Ok "installed $Name"
     } else {
         $r.Output | Select-Object -Last 5 | ForEach-Object { Write-Host "    $_" }
@@ -199,7 +213,7 @@ if ($SkipInstall) {
     if ($missing.Count -eq 0) {
         Ok "all programs already installed"
     } else {
-        foreach ($pkg in $missing) { Install-WingetPackage $pkg.Id $pkg.Name }
+        foreach ($pkg in $missing) { Install-WingetPackage $pkg.Id $pkg.Name $pkg.Test $pkg.Detached }
     }
 
     if ($Code) {
@@ -227,7 +241,7 @@ if (-not $DryRun -and -not (Test-Command git)) {
 # No dialout group on Windows: any user can open COM ports. J-Link's driver comes with the
 # SEGGER package above; ST-LINK's needs an ST account, so only check for it.
 Step "Debug probe drivers"
-if (Test-Path "$env:ProgramFiles\SEGGER\JLink*") {
+if (Test-Path "$env:ProgramFiles\SEGGER\JLink*\JLink.exe") {
     Ok "J-Link software + driver installed"
 } elseif (-not $SkipInstall -and -not $DryRun) {
     Warn "J-Link software not found in $env:ProgramFiles\SEGGER; install it from segger.com (J-Link Software and Documentation Pack) for the J-Link USB driver"
