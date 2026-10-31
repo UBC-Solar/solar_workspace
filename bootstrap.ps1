@@ -77,7 +77,23 @@ $WingetPackages = @(
 )
 
 $VSCodeExtensions = @(
-    "stmicroelectronics.stm32-vscode-extension"  # STM32Cube for VS Code (pulls in the stm32cube-ide-* pack)
+    "stmicroelectronics.stm32-vscode-extension"  # STM32Cube for VS Code (an extension pack)
+    # The pack's members, checked one by one: a pack can stay installed after members are
+    # removed, and updating it doesn't bring them back. build-cmake provides cube-cmake.
+    "stmicroelectronics.stm32cube-ide-core"
+    "stmicroelectronics.stm32cube-ide-bundles-manager"
+    "stmicroelectronics.stm32cube-ide-build-cmake"
+    "stmicroelectronics.stm32cube-ide-build-analyzer"
+    "stmicroelectronics.stm32cube-ide-project-manager"
+    "stmicroelectronics.stm32cube-ide-debug-core"
+    "stmicroelectronics.stm32cube-ide-debug-generic-gdbserver"
+    "stmicroelectronics.stm32cube-ide-debug-stlink-gdbserver"
+    "stmicroelectronics.stm32cube-ide-debug-jlink-gdbserver"
+    "stmicroelectronics.stm32cube-ide-rtos"
+    "stmicroelectronics.stm32cube-ide-registers"
+    "stmicroelectronics.stm32cube-ide-clangd"
+    "eclipse-cdt.memory-inspector"
+    "eclipse-cdt.serial-monitor"
     "ms-vscode.cmake-tools"
     "marus25.cortex-debug"                       # SWO printing
 )
@@ -326,6 +342,8 @@ if (-not $Code) {
             if ($r.ExitCode -eq 0) {
                 Ok "installed $ext"
                 $NeedsVSCodeRestart = $true
+                # Installing one can pull in others from this list
+                $installed = (Invoke-Native $Code @("--list-extensions")).Output | ForEach-Object { $_.ToLower() }
             } else {
                 $r.Output | Select-Object -Last 5 | ForEach-Object { Write-Host "    $_" }
                 Warn "couldn't install $ext; install it from the Extensions view in VS Code"
